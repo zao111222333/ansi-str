@@ -1,4 +1,4 @@
-use ansi_str::AnsiStr;
+use ansi_str_forked::AnsiStr;
 use owo_colors::{colors::*, OwoColorize};
 
 pub fn main() {

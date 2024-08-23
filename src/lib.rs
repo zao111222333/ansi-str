@@ -50,7 +50,7 @@ use std::borrow::Cow;
 use std::fmt::Write;
 use std::ops::{Bound, RangeBounds};
 
-use ansitok::{parse_ansi, AnsiColor, AnsiIterator, ElementKind};
+use ansitok_forked::{parse_ansi, AnsiColor, AnsiIterator, ElementKind};
 
 /// [`AnsiStr`] represents a list of functions to work with colored strings
 /// defined as ANSI control sequences.
@@ -557,7 +557,7 @@ fn cut_str(text: &str, lower_bound: usize, upper_bound: Option<usize>) -> Cow<'_
     let mut buf = String::new();
     let mut index = 0;
 
-    let tokens = parse_ansi(text);
+    let tokens = parse_ansi(Cow::Borrowed(text));
     '_tokens_loop: for token in tokens {
         let tkn = &text[token.start()..token.end()];
 
@@ -614,7 +614,7 @@ fn cut_str(text: &str, lower_bound: usize, upper_bound: Option<usize>) -> Cow<'_
 
 fn get(text: &str, lower_bound: Option<usize>, upper_bound: Option<usize>) -> Option<Cow<'_, str>> {
     let mut ansi_state = AnsiState::default();
-    let tokens = parse_ansi(text);
+    let tokens = parse_ansi(Cow::Borrowed(text));
     let mut buf = String::new();
     let mut index = 0;
 
@@ -688,7 +688,7 @@ fn split_at(text: &str, mid: usize) -> (Cow<'_, str>, Cow<'_, str>) {
     let mut rhs = String::new();
     let mut index = 0;
 
-    '_tokens_loop: for token in parse_ansi(text) {
+    '_tokens_loop: for token in parse_ansi(Cow::Borrowed(text)) {
         let tkn = &text[token.start()..token.end()];
 
         match token.kind() {
@@ -748,7 +748,7 @@ fn strip_prefix<'a>(text: &'a str, mut pat: &str) -> Option<Cow<'a, str>> {
     }
 
     let mut buf = String::new();
-    let mut tokens = parse_ansi(text);
+    let mut tokens = parse_ansi(Cow::Borrowed(text));
 
     // we check if there's no ansi sequences, and the prefix in the first token
     // in which case we can return Borrow
@@ -814,7 +814,7 @@ fn strip_suffix<'a>(text: &'a str, mut pat: &str) -> Option<Cow<'a, str>> {
     }
 
     #[allow(clippy::needless_collect)]
-    let tokens: Vec<_> = parse_ansi(text).collect();
+    let tokens: Vec<_> = parse_ansi(Cow::Borrowed(text)).collect();
     let mut rev_tokens = tokens.into_iter().rev();
     let mut buf = String::new();
 
@@ -880,7 +880,7 @@ fn starts_with(text: &str, mut pat: &str) -> bool {
         return true;
     }
 
-    for token in parse_ansi(text) {
+    for token in parse_ansi(Cow::Borrowed(text)) {
         if token.kind() != ElementKind::Text {
             continue;
         }
@@ -926,7 +926,7 @@ fn trim(text: &str) -> Cow<'_, str> {
     let mut buf_ansi = String::new();
     let mut trimmed = false;
 
-    for token in parse_ansi(text) {
+    for token in parse_ansi(Cow::Borrowed(text)) {
         match token.kind() {
             ElementKind::Text => {
                 let mut text = &text[token.start()..token.end()];
@@ -968,7 +968,7 @@ fn find(text: &str, pat: &str) -> Option<usize> {
 }
 
 fn has_any(text: &str) -> bool {
-    for token in parse_ansi(text) {
+    for token in parse_ansi(Cow::Borrowed(text)) {
         if token.kind() != ElementKind::Text {
             return true;
         }
@@ -979,7 +979,7 @@ fn has_any(text: &str) -> bool {
 
 fn strip_ansi_sequences(text: &str) -> Cow<'_, str> {
     let mut buf = String::new();
-    let mut tokens = parse_ansi(text);
+    let mut tokens = parse_ansi(Cow::Borrowed(text));
 
     {
         // doing small optimization in regard of string with no ansi sequences
@@ -1057,7 +1057,7 @@ impl<'a> Iterator for AnsiSplit<'a> {
             part = Cow::Owned(part_o);
         }
 
-        for token in parse_ansi(&part) {
+        for token in parse_ansi(Cow::Borrowed(&part)) {
             if token.kind() == ElementKind::Sgr {
                 let seq = &part[token.start()..token.end()];
                 update_ansi_state(&mut self.ansi_state, seq);
@@ -1092,11 +1092,11 @@ impl<'a> Iterator for AnsiSplit<'a> {
 /// }
 /// ```
 #[must_use]
-pub fn get_blocks(text: &str) -> AnsiBlockIter<'_> {
+pub fn get_blocks<'a>(text: Cow<'a, str>) -> AnsiBlockIter<'a> {
     AnsiBlockIter {
         buf: None,
         state: AnsiState::default(),
-        tokens: parse_ansi(text),
+        tokens: parse_ansi(text.clone()),
         text,
     }
 }
@@ -1104,7 +1104,7 @@ pub fn get_blocks(text: &str) -> AnsiBlockIter<'_> {
 /// An [`Iterator`] which produces a [`AnsiBlock`].
 /// It's created from [`get_blocks`] function.
 pub struct AnsiBlockIter<'a> {
-    text: &'a str,
+    text: Cow<'a, str>,
     tokens: AnsiIterator<'a>,
     buf: Option<String>,
     state: AnsiState,
@@ -1118,16 +1118,30 @@ impl<'a> Iterator for AnsiBlockIter<'a> {
             let token = self.tokens.next()?;
             match token.kind() {
                 ElementKind::Text => {
-                    let text = &self.text[token.start()..token.end()];
-                    // todo: fix the clone to borrowing.
-                    let text = match self.buf.take() {
-                        Some(mut buf) => {
-                            buf.push_str(text);
-                            Cow::Owned(buf)
-                        }
-                        None => Cow::Borrowed(text),
+                    let text = match &self.text{
+                        Cow::Borrowed(s) => {
+                            let text = &s[token.start()..token.end()];
+                            // todo: fix the clone to borrowing.
+                            match self.buf.take() {
+                                Some(mut buf) => {
+                                    buf.push_str(text);
+                                    Cow::Owned(buf)
+                                }
+                                None => Cow::Borrowed(text),
+                            }
+                        },
+                        Cow::Owned(s) => {
+                            let text = &s[token.start()..token.end()];
+                            // todo: fix the clone to borrowing.
+                            match self.buf.take() {
+                                Some(mut buf) => {
+                                    buf.push_str(text);
+                                    Cow::Owned(buf)
+                                }
+                                None => Cow::Owned(text.to_owned()),
+                            }
+                        },
                     };
-
                     return Some(AnsiBlock::new(text, self.state));
                 }
                 ElementKind::Sgr => {
@@ -2776,7 +2790,11 @@ mod tests {
             ([$($string:expr),* $(,)?], $expected:expr) => {
                 $(
                     assert_eq!(
-                        get_blocks($string).collect::<Vec<_>>(),
+                        get_blocks(Cow::Borrowed($string)).collect::<Vec<_>>(),
+                        $expected,
+                    );
+                    assert_eq!(
+                        get_blocks(Cow::Owned($string.to_owned())).collect::<Vec<_>>(),
                         $expected,
                     );
                 )*
